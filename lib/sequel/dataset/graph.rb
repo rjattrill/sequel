@@ -26,7 +26,7 @@ module Sequel
     #
     # Arguments:
     # dataset :: Can be a symbol (specifying a table), another dataset,
-    #            or an object that responds to +dataset+ and returns a symbol or a dataset
+    #            or an SQL::Identifier, SQL::QualifiedIdentifier, or SQL::AliasedExpression.
     # join_conditions :: Any condition(s) allowed by +join_table+.
     # block :: A block that is passed to +join_table+.
     #
@@ -50,21 +50,35 @@ module Sequel
       # Allow the use of a dataset or symbol as the first argument
       # Find the table name/dataset based on the argument
       table_alias = options[:table_alias]
+      table = dataset
+      create_dataset = true
+
       case dataset
       when Symbol
-        table = dataset
-        dataset = @db[dataset]
-        table_alias ||= table
-      when ::Sequel::Dataset
+        # let alias be the same as the table name (sans any optional schema)
+        # unless alias explicitly given in the symbol using ___ notation
+        table_alias ||= split_symbol(table).compact.last
+      when Dataset
         if dataset.simple_select_all?
           table = dataset.opts[:from].first
           table_alias ||= table
         else
-          table = dataset
           table_alias ||= dataset_alias((@opts[:num_dataset_sources] || 0)+1)
         end
+        create_dataset = false
+      when SQL::Identifier
+        table_alias ||= table.value
+      when SQL::QualifiedIdentifier
+        table_alias ||= split_qualifiers(table).last
+      when SQL::AliasedExpression
+        return graph(table.expression, join_conditions, {:table_alias=>table.alias}.merge(options), &block)
       else
         raise Error, "The dataset argument should be a symbol or dataset"
+      end
+      table_alias = table_alias.to_sym
+
+      if create_dataset
+        dataset = db.from(table)
       end
 
       # Raise Sequel::Error with explanation that the table alias has been used
@@ -76,8 +90,8 @@ module Sequel
       # Only allow table aliases that haven't been used
       raise_alias_error.call if @opts[:graph] && @opts[:graph][:table_aliases] && @opts[:graph][:table_aliases].include?(table_alias)
       
-      # Use a from_self if this is already a joined table
-      ds = (!@opts[:graph] && (@opts[:from].length > 1 || @opts[:join])) ? from_self(:alias=>options[:from_self_alias] || first_source) : self
+      # Use a from_self if this is already a joined table (or from_self specifically disabled for graphs)
+      ds = (@opts[:graph_from_self] != false && !@opts[:graph] && (@opts[:from].length > 1 || @opts[:join])) ? from_self(:alias=>options[:from_self_alias] || first_source) : self
       
       # Join the table early in order to avoid cloning the dataset twice
       ds = ds.join_table(options[:join_type] || :left_outer, table, join_conditions, :table_alias=>table_alias, :implicit_qualifier=>options[:implicit_qualifier], :qualify=>options[:qualify], &block)
@@ -121,7 +135,7 @@ module Sequel
                 column = column.value if column.is_a?(SQL::Identifier)
                 column.to_sym
               when SQL::AliasedExpression
-                column = sel.aliaz
+                column = sel.alias
                 column = column.value if column.is_a?(SQL::Identifier)
                 column.to_sym
               else

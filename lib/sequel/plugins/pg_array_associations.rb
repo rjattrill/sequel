@@ -95,6 +95,18 @@ module Sequel
           :"#{underscore(demodulize(self[:model].name))}_ids"
         end
         
+        # Always use the ruby eager_graph limit strategy if association is limited.
+        def eager_graph_limit_strategy(_)
+          :ruby if self[:limit]
+        end
+
+        # Always use the ruby eager limit strategy
+        def eager_limit_strategy
+          cached_fetch(:_eager_limit_strategy) do
+            :ruby if self[:limit]
+          end
+        end
+
         # Handle silent failure of add/remove methods if raise_on_save_failure is false.
         def handle_silent_modification_failure?
           self[:raise_on_save_failure] == false
@@ -164,6 +176,18 @@ module Sequel
         # that use *_id for single keys.
         def default_key
           :"#{singularize(self[:name])}_ids"
+        end
+
+        # Always use the ruby eager_graph limit strategy if association is limited.
+        def eager_graph_limit_strategy(_)
+          :ruby if self[:limit]
+        end
+
+        # Always use the ruby eager limit strategy
+        def eager_limit_strategy
+          cached_fetch(:_eager_limit_strategy) do
+            :ruby if self[:limit]
+          end
         end
 
         # Handle silent failure of add/remove methods if raise_on_save_failure is false
@@ -247,9 +271,7 @@ module Sequel
           opts[:eager_loader] ||= proc do |eo|
             id_map = eo[:id_map]
             rows = eo[:rows]
-            rows.each do |object|
-              object.associations[name] = []
-            end
+            opts.initialize_association_cache(rows)
 
             klass = opts.associated_class
             ds = model.eager_loading_dataset(opts, klass.where(Sequel.pg_array_op(opts.predicate_key).overlaps(id_map.keys)), nil, eo[:associations], eo)
@@ -263,9 +285,7 @@ module Sequel
                 end
               end
             end
-            if slice_range
-              rows.each{|o| o.associations[name] = o.associations[name][slice_range] || []}
-            end
+            opts.apply_ruby_eager_limit_strategy(rows)
           end
 
           join_type = opts[:graph_join_type]
@@ -292,7 +312,7 @@ module Sequel
 
           opts[:eager_grapher] ||= proc do |eo|
             ds = eo[:self]
-            ds = ds.graph(eager_graph_dataset(opts, eo), conditions, eo.merge(:select=>select, :join_type=>join_type, :qualify=>:deep, :from_self_alias=>ds.opts[:eager_graph][:master]), &graph_block)
+            ds = ds.graph(eager_graph_dataset(opts, eo), conditions, eo.merge(:select=>select, :join_type=>eo[:join_type]||join_type, :qualify=>:deep, :from_self_alias=>eo[:from_self_alias]), &graph_block)
             ds
           end
 
@@ -348,8 +368,9 @@ module Sequel
             rows = eo[:rows]
             id_map = {}
             pkm = opts.primary_key_method
+            opts.initialize_association_cache(rows)
+
             rows.each do |object|
-              object.associations[name] = []
               if associated_pks = object.send(key)
                 associated_pks.each do |apk|
                   (id_map[apk] ||= []) << object
@@ -366,9 +387,7 @@ module Sequel
                 end
               end
             end
-            if slice_range
-              rows.each{|o| o.associations[name] = o.associations[name][slice_range] || []}
-            end
+            opts.apply_ruby_eager_limit_strategy(rows)
           end
 
           join_type = opts[:graph_join_type]
@@ -395,7 +414,7 @@ module Sequel
 
           opts[:eager_grapher] ||= proc do |eo|
             ds = eo[:self]
-            ds = ds.graph(eager_graph_dataset(opts, eo), conditions, eo.merge(:select=>select, :join_type=>join_type, :qualify=>:deep, :from_self_alias=>ds.opts[:eager_graph][:master]), &graph_block)
+            ds = ds.graph(eager_graph_dataset(opts, eo), conditions, eo.merge(:select=>select, :join_type=>eo[:join_type]||join_type, :qualify=>:deep, :from_self_alias=>eo[:from_self_alias]), &graph_block)
             ds
           end
 
